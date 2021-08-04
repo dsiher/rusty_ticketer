@@ -132,15 +132,15 @@ fn parse_page(page_json: json::JsonValue) -> Page {
 /// If the `Ticket` cannot be viewed (has no id) then it is discarded.
 ///
 /// # Arguments
-/// * `tickets` - a vector of tickets
-fn row_generator(tickets: Ticket) -> Option<Vec<String>> {
+/// * `ticket` - a single ticket
+fn row_generator(ticket: Ticket) -> Option<Vec<String>> {
     let mut result = Vec::new();
-    if tickets.viewable {
-        result.push(tickets.id);
-        result.push(tickets.priority);
-        result.push(tickets.subject);
-        result.push(tickets.creator);
-        result.push(tickets.created);
+    if ticket.viewable {
+        result.push(ticket.id);
+        result.push(ticket.priority);
+        result.push(ticket.subject);
+        result.push(ticket.creator);
+        result.push(ticket.created);
         Some(result)
     } else {
         None
