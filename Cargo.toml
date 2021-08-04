@@ -1,0 +1,12 @@
+[package]
+name = "rusty_ticketer"
+version = "0.1.0"
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+reqwest = { version = "0.11.4", features=["blocking"] }
+json = "0.12.4"
+crossterm = "0.20.0"
+tui = { version = "0.16", default-features = false, features = ['crossterm'] }
