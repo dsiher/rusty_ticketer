@@ -52,9 +52,13 @@ struct Ticket {
 /// The representation of a page
 #[derive(Clone)]
 struct Page {
+    /// Whether Zendesk's cursor pagination has another page to offer
     has_more: bool,
+    /// The url of the next page if it exists, "none" otherwise
     next: String,
+    /// The url of the previous page if it exists, "none" otherwise
     prev: String,
+    /// A vector of all tickets contained in this page
     tickets: Vec<Ticket>,
 }
 
@@ -85,8 +89,10 @@ fn request_page(
     // Parse and return the response as json
     match json::parse(&resp.text()?) {
         Ok(json) => Ok(json),
-        // TODO: Handle this without panicking
-        Err(_) => panic!("Received invalid json from Zendesk API"),
+        Err(_) => {
+            println!("Unable to parse Zendesk API response. Try again later.");
+            std::process::exit(1);
+        }
     }
 }
 
@@ -153,22 +159,45 @@ enum View {
     Info,
 }
 
+/// Closes process down when encountering a reqwest error (trouble connecting to the Zendesk API)
+/// 
+/// Could be improved by invoking a retry after a delay
+fn handle_reqwest_errors() {
+    println!("Failed to connect to the Zendesk API. Try again later.");
+    std::process::exit(1);
+}
+
 /// Initializes the rusty ticketer with a provided access token
-/// Requires: the first command line argument must be a valid API token
-/// The terminal is adapted (almost exactly) from the tui crate examples
+/// # Requires: 
+/// the first command line argument must be a valid API token
+/// 
+/// This terminal user interface (TUI) is adapted from a variety of tui crate examples
+/// 
+/// # Note
+/// All expect statements are used for values that had no documented failure cases.
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let token = &args[1];
+    let default = args.get(0).expect("This is guaranteed to exist");
+    let token = match args.get(1) {
+        Some(value) => value,
+        None => default
+    };
+    if token.eq(default) {
+        println!("You must provide a valid API token as an argument for the ticket viewer to launch.");
+        std::process::exit(1);
+    }
+
 
     // Creates the reqwest Client for use in all web request functionality
     // Uses blocking  functionality as async does not really help performance.
     // Linux requires OpenSSL to be installed (!)
     let client = match blocking::Client::builder().build() {
         Ok(clnt) => clnt,
-        Err(_) => panic!(
+        Err(_) => { println!(
             "The reqwest client was unable to initialize a TLS backend.\n\
-             For Linux usage, make sure you have installed OpenSSL 1.1.1"
-        ),
+             For Linux usage, make sure you have installed OpenSSL 1.1.1");
+             std::process::exit(1);
+        }
     };
 
     // Create the URL used to access the initial ticket page as per Zendesk API docs
@@ -180,16 +209,18 @@ fn main() {
     // Attempts to request the initial set of tickets.
     let init_tickets = request_page(&client, token, &url);
     match init_tickets {
-        // TODO: Handle reqwest errors here!
-        // (Error Authenticating / Error sending req / Error getting text from body)
-        Err(_) => panic!("Ahh! reqwest!"),
+        Err(_) => handle_reqwest_errors(),
         Ok(parsed_json) => {
+            if !parsed_json["error"].is_null() {
+                println!("Failed to authenticate you. Make sure the API token is valid for the constant account.");
+                std::process::exit(1);
+            }
             let mut curr_page = parse_page(parsed_json);
             let mut cached_prev = curr_page.prev.clone();
             // Start creating a TUI
 
             // Enter raw mode for a nicer terminal experience
-            terminal::enable_raw_mode();
+            terminal::enable_raw_mode().expect("Failed to enter raw mode.");
 
             // Initialize terminal
             let stdout = io::stdout();
@@ -221,10 +252,13 @@ fn main() {
                 }
             });
 
-            // Define table state
+            // Define current active view
             let mut active_view = View::Table;
+            // Define current selected ticket
             let mut ticket_table_state = TableState::default();
+            // Define how many times it is valid to go back a page (more explanation later)
             let mut left_avail = 0;
+            // Initialize selected ticket to 0
             ticket_table_state.select(Some(0));
 
             // Begin TUI loop
@@ -232,8 +266,8 @@ fn main() {
                 terminal
                     .draw(|canvas| {
                         // Initialize a few style things
-                        let selected_style = Style::default().add_modifier(Modifier::REVERSED);
-                        let normal_style = Style::default().bg(Color::Blue);
+                        let selected_style = Style::default().fg(Color::LightYellow);
+                        let normal_style = Style::default().add_modifier(Modifier::UNDERLINED);
                         let header_cells = ["ID", "Priority", "Subject", "Submitter", "Date"]
                             .iter()
                             .map(|h| Cell::from(*h).style(Style::default()));
@@ -242,7 +276,7 @@ fn main() {
                             .height(1)
                             .bottom_margin(1);
 
-                        // Divide terminal into two sections (table and instructions)
+                        // Divide terminal into two sections (views and instructions)
                         let sections = Layout::default()
                             .direction(Direction::Vertical)
                             .constraints([
@@ -263,8 +297,10 @@ fn main() {
                             .title("Instructions")
                         );
                         
+                        // Decide between the two views to render
                         match active_view {
                             View::Table => { 
+                                // Begin the rendering process for the ticket table
                                 let tickets: Vec<Vec<String>> = curr_page
                                     .clone()
                                     .tickets
@@ -282,18 +318,20 @@ fn main() {
                                     .borders(Borders::ALL)
                                     .title("Rusty-Ticketer"))
                                     .highlight_style(selected_style)
-                                    .highlight_symbol("> ")
+                                    .highlight_symbol(">> ")
+                                    .column_spacing(2)
                                     .widths(&[
-                                        Constraint::Percentage(10),
-                                        Constraint::Percentage(16),
-                                        Constraint::Percentage(30),
-                                        Constraint::Percentage(16),
-                                        Constraint::Percentage(16),
+                                        Constraint::Percentage(5),
+                                        Constraint::Length(8),
+                                        Constraint::Percentage(40),
+                                        Constraint::Percentage(15),
+                                        Constraint::Length(10),
                                     ]);
                                 canvas.render_stateful_widget(t, sections[0], &mut ticket_table_state);
                                 canvas.render_widget(instructions_table, sections[1]);
                             }
                             View::Info => {
+                                // Begin the rendering process for a single ticket
                                 if let Some(selected) = ticket_table_state.selected() {
                                     let ticket = curr_page.tickets[selected].clone();
                                     let subject = Style::default().add_modifier(Modifier::BOLD);
@@ -315,26 +353,30 @@ fn main() {
                     })
                     .expect("Failed to draw TUI");
 
-                // event handling
+                // Event handling
                 match rx
                     .recv()
                     .expect("Something shut down a thread we were relying on.")
                 {
                     Event::Input(event) => match event.code {
+                        // Handle quit on 'Q' or 'q'
                         KeyCode::Char('q') | KeyCode::Char('Q') => {
                             terminal::disable_raw_mode().expect("Failed to disable raw mode.");
                             terminal.clear().expect("Failed to clear terminal.");
                             break;
                         }
+                        // Handle scrolling down
                         KeyCode::Down => {
                             if let Some(selected) = ticket_table_state.selected() {
                                 let ticket_num = curr_page.tickets.len();
                                 ticket_table_state.select(Some((selected + 1) % ticket_num));
                             }
                         }
+                        // Handle scrolling up
                         KeyCode::Up => {
                             if let Some(selected) = ticket_table_state.selected() {
                                 let ticket_num = curr_page.tickets.len();
+                                // Cannot use mod as selected is unsigned, results in overflow
                                 if selected > 0 {
                                     ticket_table_state.select(Some(selected - 1));
                                 } else {
@@ -342,12 +384,14 @@ fn main() {
                                 }
                             }
                         }
+                        // Handle next page
                         KeyCode::Right => {
                             if curr_page.has_more && matches!(active_view, View::Table) {
                                 let page_json = request_page(&client, token, &curr_page.next);
                                 match page_json {
-                                    Err(_) => panic!("Ahh reqwest!"),
+                                    Err(_) => handle_reqwest_errors(),
                                     Ok(parsed_json) => {
+                                        // Workaround to prevent being able to go back from the first page
                                         left_avail += 1;
                                         cached_prev = curr_page.prev;
                                         curr_page = parse_page(parsed_json);
@@ -356,8 +400,13 @@ fn main() {
                                 }
                             }
                         },
+                        // Handle previous page
                         KeyCode::Left => {
+                            // Check that there are left pages available as per the workaround
                             if matches!(active_view, View::Table) && left_avail > 0 {
+                                // In an edge case in the Zendesk API, it is possible to go to a next page
+                                // that has no prev or next values, therefore the prior prev is kept cached
+                                // so that if this happens, it can be used to escape from a blank screen.
                                 let prev = if curr_page.prev.eq("none") {
                                     &cached_prev
                                 } else {
@@ -365,7 +414,7 @@ fn main() {
                                 };
                                 let page_json = request_page(&client, token, prev);
                                 match page_json {
-                                    Err(_) => panic!("Ahh reqwest!"),
+                                    Err(_) => handle_reqwest_errors(),
                                     Ok(parsed_json) => {
                                         left_avail -= 1;
                                         curr_page = parse_page(parsed_json);
@@ -374,14 +423,17 @@ fn main() {
                                 }
                             }
                         },
+                        // Handle entering single ticket view
                         KeyCode::Enter => {
                             active_view = View::Info;
                         },
+                        // Handle exiting single ticket view
                         KeyCode::Backspace => {
                             active_view = View::Table;
                         }
                         _ => {}
                     },
+                    // Handle the tick event that is generated when no input is found
                     Event::Tick => {}
                 }
             }
