@@ -90,7 +90,7 @@ fn request_page(
     match json::parse(&resp.text()?) {
         Ok(json) => Ok(json),
         Err(_) => {
-            println!("Unable to parse Zendesk API response. Try again later.");
+            println!("Unable to parse Zendesk API response. Please try again.");
             std::process::exit(1);
         }
     }
@@ -438,5 +438,222 @@ fn main() {
                 }
             }
         }
+    }
+}
+
+// It is apparently customary for Rust unit testing to be done in the same file
+// as the code is implemented, so testing is below
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_request_page_wrong_token() {
+        let client = blocking::Client::builder().build().expect("Client failed");
+        let url = format!("https://{}.zendesk.com/api/v2/tickets.json?page[size]={}",SUBDOMAIN, MAX_TIX);
+        let fail_auth = json::parse("{ \"error\": \"Couldn't authenticate you\"}").expect("should parse");
+        assert_eq!(request_page(&client, &String::from("token"), &url).expect("Connection bad"), fail_auth); 
+    }
+
+    const SAMPLE_TICKET_JSON : &str = 
+    r#"
+    {
+        "assignee_id": 235323,
+        "collaborator_ids": [
+          35334,
+          234
+        ],
+        "created_at": "2009-07-20T22:55:29Z",
+        "custom_fields": [
+          {
+            "id": 27642,
+            "value": "745"
+          },
+          {
+            "id": 27648,
+            "value": "yes"
+          }
+        ],
+        "description": "The fire is very colorful.",
+        "due_at": null,
+        "external_id": "ahg35h3jh",
+        "follower_ids": [
+          35334,
+          234
+        ],
+        "group_id": 98738,
+        "has_incidents": false,
+        "id": 35436,
+        "organization_id": 509974,
+        "priority": "high",
+        "problem_id": 9873764,
+        "raw_subject": "{{dc.printer_on_fire}}",
+        "recipient": "support@company.com",
+        "requester_id": 20978392,
+        "satisfaction_rating": {
+          "comment": "Great support!",
+          "id": 1234,
+          "score": "good"
+        },
+        "sharing_agreement_ids": [
+          84432
+        ],
+        "status": "open",
+        "subject": "Help, my printer is on fire!",
+        "submitter_id": 76872,
+        "tags": [
+          "enterprise",
+          "other_tag"
+        ],
+        "type": "incident",
+        "updated_at": "2011-05-05T10:38:52Z",
+        "url": "https://company.zendesk.com/api/v2/tickets/35436.json",
+        "via": {
+          "channel": "web"
+        }
+      }
+    "#;
+
+    #[test]
+    fn test_parse_ticket_id() {
+        let expected_ticket : Ticket = Ticket {
+            id: "35436".to_string(),
+            priority: "high".to_string(),
+            subject: "Help, my printer is on fire!".to_string(),
+            creator: "76872".to_string(),
+            created: "2009-07-20T22:55:29Z".to_string(),
+            description: "The fire is very colorful.".to_string(),
+            viewable: true,
+        };
+        assert_eq!(parse_ticket(&json::parse(SAMPLE_TICKET_JSON).expect("should parse")).id, expected_ticket.id);
+    }
+
+    #[test]
+    fn test_parse_ticket_priority() {
+        let expected_ticket : Ticket = Ticket {
+            id: "35436".to_string(),
+            priority: "high".to_string(),
+            subject: "Help, my printer is on fire!".to_string(),
+            creator: "76872".to_string(),
+            created: "2009-07-20T22:55:29Z".to_string(),
+            description: "The fire is very colorful.".to_string(),
+            viewable: true,
+        };
+        assert_eq!(parse_ticket(&json::parse(SAMPLE_TICKET_JSON).expect("should parse")).priority, expected_ticket.priority);
+    }
+
+    #[test]
+    fn test_parse_ticket_subject() {
+        let expected_ticket : Ticket = Ticket {
+            id: "35436".to_string(),
+            priority: "high".to_string(),
+            subject: "Help, my printer is on fire!".to_string(),
+            creator: "76872".to_string(),
+            created: "2009-07-20T22:55:29Z".to_string(),
+            description: "The fire is very colorful.".to_string(),
+            viewable: true,
+        };
+        assert_eq!(parse_ticket(&json::parse(SAMPLE_TICKET_JSON).expect("should parse")).subject, expected_ticket.subject);
+    }
+
+    #[test]
+    fn test_parse_ticket_noid() {
+        let expected_ticket = Ticket {
+            id: "-1".to_string(),
+            priority: "N/A".to_string(),
+            subject: "N/A".to_string(),
+            creator: "N/A".to_string(),
+            created: "N/A".to_string(),
+            description: "N/A".to_string(),
+            viewable: false,
+        };
+        assert_eq!(parse_ticket(&json::parse("{\"something\" : \"something\" }").expect("should parse")).viewable, expected_ticket.viewable);
+    }
+
+    #[test]
+    fn test_parse_ticket_default_val() {
+        let expected_ticket = Ticket {
+            id: "-1".to_string(),
+            priority: "N/A".to_string(),
+            subject: "N/A".to_string(),
+            creator: "N/A".to_string(),
+            created: "N/A".to_string(),
+            description: "N/A".to_string(),
+            viewable: false,
+        };
+        assert_eq!(parse_ticket(&json::parse("{\"something\" : \"something\" }").expect("should parse")).id, expected_ticket.id);
+    }
+
+    #[test]
+    fn test_parse_ticket_default_val2() {
+        let expected_ticket = Ticket {
+            id: "-1".to_string(),
+            priority: "N/A".to_string(),
+            subject: "N/A".to_string(),
+            creator: "N/A".to_string(),
+            created: "N/A".to_string(),
+            description: "N/A".to_string(),
+            viewable: false,
+        };
+        assert_eq!(parse_ticket(&json::parse("{\"something\" : \"something\" }").expect("should parse")).priority, expected_ticket.priority);
+    }
+
+    const SAMPLE_PAGE_JSON : &str = r#"
+        {
+            "tickets": [],
+            "meta": {
+                "has_more": true,
+                "after_cursor": "xxx",
+                "before_cursor": "yyy"
+            },
+            "links": {
+                "next": "https://example.zendesk.com/api/v2/tickets.json?page[size]=100&page[after]=xxx",
+                "prev": "https://example.zendesk.com/api/v2/tickets.json?page[size]=100&page[before]=yyy"
+            }
+        }"#;
+
+    #[test]
+    fn test_parse_page() {
+        let expected_page = Page {
+            has_more: true,
+            next: "https://example.zendesk.com/api/v2/tickets.json?page[size]=100&page[after]=xxx".to_string(),
+            prev: "https://example.zendesk.com/api/v2/tickets.json?page[size]=100&page[before]=yyy".to_string(),
+            tickets: Vec::new(),
+        };
+        assert_eq!(parse_page(json::parse(SAMPLE_PAGE_JSON).expect("parses")).next, expected_page.next);
+    }
+
+    #[test]
+    fn test_row_generator_nviewable() {
+        let ticket_sample = Ticket {
+            id: "-1".to_string(),
+            priority: "N/A".to_string(),
+            subject: "N/A".to_string(),
+            creator: "N/A".to_string(),
+            created: "N/A".to_string(),
+            description: "N/A".to_string(),
+            viewable: false,
+        };
+        assert_eq!(row_generator(ticket_sample), None)
+    }
+
+    #[test]
+    fn test_row_generator_viewable() {
+        let ticket_sample = Ticket {
+            id: "-1".to_string(),
+            priority: "N/A".to_string(),
+            subject: "N/A".to_string(),
+            creator: "N/A".to_string(),
+            created: "N/A".to_string(),
+            description: "N/A".to_string(),
+            viewable: true,
+        };
+        let mut expected_output = Vec::new();
+        expected_output.push("-1".to_string());
+        expected_output.push("N/A".to_string());
+        expected_output.push("N/A".to_string());
+        expected_output.push("N/A".to_string());
+        expected_output.push("N/A".to_string());
+        assert_eq!(row_generator(ticket_sample), Some(expected_output));
     }
 }
